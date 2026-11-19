@@ -1,8 +1,17 @@
-import { ancestors, commitFiles, filesAt, links, save } from './objects.ts'
+import { ancestors, commitFiles, filesAt, links, save, treeEntries } from './objects.ts'
 
 export const viewer = {login:'adaiversen', id:1, node_id:'User_1', type:'User'}
 export const repos = new Map()
 export const nodes = new Map()
+const issueBodies = new WeakMap()
+export function issueJSON(issue) {
+  let json = issueBodies.get(issue)
+  if (json === undefined) {
+    json = JSON.stringify(issue)
+    issueBodies.set(issue,json)
+  }
+  return json
+}
 const identity = {name:viewer.login,email:viewer.login+'@users.noreply.local'}
 let sequence = 1
 export function fail(status,message) { throw Object.assign(new Error(message),{status}) }
@@ -42,6 +51,7 @@ export function createIssue(repo,input) {
   return issue
 }
 export function updateIssue(issue,input) {
+  issueBodies.delete(issue)
   if (input.title !== undefined) issue.title = input.title
   if (input.body !== undefined) issue.body = input.body
   if (input.state !== undefined) {
@@ -60,6 +70,7 @@ export function comment(repo,issue,input) {
   if (!thread) repo.comments.set(issue.number,thread=[])
   thread.push(item)
   issue.comments++
+  issueBodies.delete(issue)
   return item
 }
 export function tip(repo,ref) {
@@ -71,21 +82,20 @@ export function commitView(repo,sha) {
   return {sha,commit:{message:text.slice(text.indexOf('\n\n')+2).replace(/\n$/,''),tree:{sha:links(obj)[0]}},parents:links(obj).slice(1).map(sha=>({sha})),author:viewer,committer:viewer}
 }
 export function content(repo,path,ref) {
-  const sha = required(tip(repo,ref || repo.info.default_branch))
-  const files = filesAt(repo,sha)
-  const leaf = files.get(path)
-  if (leaf) {
-    const obj = required(repo.objects.get(leaf.sha))
-    return {name:path.split('/').at(-1),path,type:'file',sha:leaf.sha,encoding:'base64',size:obj.data.length,content:obj.data.toString('base64')}
+  const commit = required(repo.objects.get(tip(repo,ref || repo.info.default_branch)))
+  let sha = links(commit)[0]
+  for (const segment of path.split('/').filter(Boolean)) {
+    const parent = required(repo.objects.get(sha))
+    if (parent.type !== 'tree') fail(404,'Not Found')
+    sha = required(treeEntries(parent).find(e => e.name === segment)).sha
   }
-  const prefix = path ? path+'/' : ''
-  const names = new Map()
-  for (const [file,item] of files) if (file.startsWith(prefix)) {
-    const rest = file.slice(prefix.length), name = rest.split('/')[0]
-    if (!names.has(name)) names.set(name,{name,path:prefix+name,type:rest.includes('/')?'dir':'file',sha:item.sha,size:rest.includes('/')?0:repo.objects.get(item.sha)?.data.length})
-  }
-  if (!names.size) fail(404,'Not Found')
-  return [...names.values()]
+  const obj = required(repo.objects.get(sha))
+  if (obj.type === 'blob') return {name:path.split('/').at(-1),path,type:'file',sha,encoding:'base64',size:obj.data.length,content:obj.data.toString('base64')}
+  return treeEntries(obj).map(e=>{
+    const child = repo.objects.get(e.sha)
+    const type = child?.type === 'tree' ? 'dir' : 'file'
+    return {name:e.name,path:path ? path+'/'+e.name : e.name,type,sha:e.sha,size:child?.type === 'blob' ? child.data.length : 0}
+  })
 }
 export function editContent(repo,path,input,remove) {
   if (!path || path.split('/').some(p=>!p || p==='.' || p==='..') || typeof input.message !== 'string') fail(422,'Invalid content request')

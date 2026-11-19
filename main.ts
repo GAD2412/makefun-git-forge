@@ -11,19 +11,34 @@ if (!token) throw Error('MAKEFUN_SHOP_TOKEN is required')
 const env = process.env.MAKEFUN_ENV_URL?.replace(/\/+$/,'')
 const bearer = 'Bearer '+token
 let requests = 0
-function json(res,status,body,headers={}) {
-  res.writeHead(status,{'content-type':'application/json; charset=utf-8','x-github-request-id':(++requests).toString(16),...headers})
-  res.end(body === undefined ? undefined : JSON.stringify(body))
+function json(res,status,body,headers={},encoded=undefined) {
+  res.statusCode = status
+  res.setHeader('Content-Type','application/json; charset=utf-8')
+  res.setHeader('X-GitHub-Request-Id',(++requests).toString(16))
+  for (const [name,value] of Object.entries(headers)) res.setHeader(name,value)
+  // end() can send a fixed-length JSON reply and its headers in one write.
+  res.end(encoded ?? (body === undefined ? undefined : JSON.stringify(body)))
 }
-async function read(req) {
-  const chunks=[]
-  let length=0
-  for await (const chunk of req) {
-    length+=chunk.length
-    if(length>64*1024*1024) fail(413,'Payload too large')
-    chunks.push(chunk)
-  }
-  return chunks.length===1?chunks[0]:Buffer.concat(chunks)
+function read(req) {
+  const limit = 64 * 1024 * 1024
+  if (Number(req.headers['content-length']) > limit) fail(413,'Payload too large')
+  return new Promise((resolve,reject)=>{
+    const chunks = []
+    let length = 0
+    req.on('data',chunk=>{
+      length += chunk.length
+      if (length <= limit) chunks.push(chunk)
+      else if (chunks.length) {
+        chunks.length = 0
+        reject(Object.assign(new Error('Payload too large'),{status:413}))
+      }
+    })
+    req.once('error',reject)
+    req.once('end',()=>{
+      if (length > limit) reject(Object.assign(new Error('Payload too large'),{status:413}))
+      else resolve(chunks.length === 1 ? chunks[0] : Buffer.concat(chunks,length))
+    })
+  })
 }
 const server=http.createServer(async (req,res)=>{
   try {
@@ -58,7 +73,7 @@ const server=http.createServer(async (req,res)=>{
     }
     if(!/^\/api\/v3(?:\/|$)/.test(url.pathname)) fail(404,'Not Found')
     const result=rest(req.method,url,body)
-    json(res,result.status || 200,result.body,result.headers)
+    json(res,result.status || 200,result.body,result.headers,result.encoded)
   } catch(e){json(res,e.status || 500,{message:e.status?e.message:'Internal Server Error'})}
 })
 server.keepAliveTimeout=65000

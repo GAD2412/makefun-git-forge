@@ -1,4 +1,4 @@
-import { viewer,repos,lookup,createRepo,deleteRepo,required,fail,tip,content,editContent,commitView,createIssue,updateIssue,comment,createPull,pullView,changes,merge } from './store.ts'
+import { viewer,repos,lookup,createRepo,deleteRepo,required,fail,tip,content,editContent,commitView,createIssue,issueJSON,updateIssue,comment,createPull,pullView,changes,merge } from './store.ts'
 import {ancestors} from './objects.ts'
 
 function page(items,url) {
@@ -79,7 +79,7 @@ export function rest(method,url,body) {
       return list(issues)
     }
     const issue = required(repo.issues.get(Number(item)))
-    if (!sub && get) return {body:issue}
+    if (!sub && get) return {encoded:issueJSON(issue)}
     if (!sub && method === 'PATCH') return {body:updateIssue(issue,body)}
     if (sub === 'comments' && post) return {status:201,body:comment(repo,issue,body)}
     if (sub === 'comments' && get) return list(repo.comments.get(issue.number) || [])
